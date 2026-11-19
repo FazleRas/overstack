@@ -27,7 +27,11 @@
   'use strict';
 
   // ---------------------------------------------------------------- constants
+  // W is the play field. On a wide desktop screen the view grows to WIDE_W
+  // (16:9) and the extra columns show more scenery on both sides; the play
+  // field stays 160 wide in the middle, so gameplay is identical.
   const W = 160, H = 240, BH = 8, GROUND_Y = H - 22;
+  const WIDE_W = 426, MAX_OX = (WIDE_W - W) / 2;
   const START_W = 64, PERFECT_TOL = 2, GROW = 3, ZONE_EVERY = 25;
   const CUR_SCREEN_Y = 92;
   const MAX_NAME = 8, MAX_SCORES = 10;
@@ -312,14 +316,15 @@
   function skyCanvas(pi) {
     if (skyCache[pi]) return skyCache[pi];
     const p = PALETTES[pi];
-    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    // built at the widest view size; drawn at -MAX_OX in field coordinates
+    const c = document.createElement('canvas'); c.width = WIDE_W; c.height = H;
     const g = c.getContext('2d');
     const bandH = H / p.sky.length;
-    p.sky.forEach((col, i) => { g.fillStyle = col; g.fillRect(0, i * bandH, W, bandH); });
+    p.sky.forEach((col, i) => { g.fillStyle = col; g.fillRect(0, i * bandH, WIDE_W, bandH); });
     // dithered seams between flat bands
     for (let i = 1; i < p.sky.length; i++) {
       const y0 = i * bandH;
-      for (let x = 0; x < W; x++) {
+      for (let x = 0; x < WIDE_W; x++) {
         g.fillStyle = p.sky[i];
         if ((x & 3) === 0) g.fillRect(x, y0 - 3, 1, 1);
         if ((x & 1) === 0) g.fillRect(x, y0 - 2, 1, 1);
@@ -372,13 +377,24 @@
     g.imageSmoothingEnabled = false;
     const coarse = !!(root.matchMedia && root.matchMedia('(pointer: coarse)').matches);
 
-    const maxScale = opts.maxScale || 3;
+    // VW = current view width, OX = where the play field starts inside it.
+    // Everything is drawn in field coordinates shifted right by OX.
+    let VW = W, OX = 0;
+    const allowWide = opts.wide !== false && !coarse;
+    const maxScale = opts.maxScale || 4;
     function fit() {
       if (document.activeElement === input) return; // don't resize when the mobile keyboard opens
       const avail = host.clientWidth || W;
-      let s = Math.min(avail / W, maxScale, (root.innerHeight * 0.95) / H);
+      // landscape only on a mouse/keyboard device with room for it at 2x or more
+      const vw = allowWide && avail >= WIDE_W * 2 && root.innerWidth > root.innerHeight ? WIDE_W : W;
+      if (vw !== VW) {
+        VW = vw; OX = (VW - W) / 2;
+        canvas.width = VW;
+        g.imageSmoothingEnabled = false; // resizing a canvas resets its context
+      }
+      let s = Math.min(avail / VW, maxScale, (root.innerHeight * 0.95) / H);
       if (s >= 1) s = Math.floor(s);
-      st.width = Math.round(W * s) + 'px';
+      st.width = Math.round(VW * s) + 'px';
       st.height = Math.round(H * s) + 'px';
     }
     fit();
@@ -414,9 +430,11 @@
     const qualifies = s => s > 0 && (scores.length < MAX_SCORES || s > scores[scores.length - 1].score);
     let dirFlip = 1;
     const debris = [], parts = [], floats = [];
-    const stars = Array.from({ length: 36 }, () => ({ x: (Math.random() * W) | 0, y: (Math.random() * H) | 0, p: Math.random() * 6 }));
-    const clouds = Array.from({ length: 4 }, (_, i) => ({ x: Math.random() * W, y: 30 + i * 46, w: 14 + ((Math.random() * 14) | 0), v: 2 + Math.random() * 4 }));
-    const hills = Array.from({ length: W }, (_, x) => Math.round(16 + 7 * Math.sin(x * 0.06) + 5 * Math.sin(x * 0.17 + 1.3) + 2 * Math.sin(x * 0.5)));
+    // scenery covers the widest view (field x from -MAX_OX to W + MAX_OX)
+    const stars = Array.from({ length: 96 }, () => ({ x: ((Math.random() * WIDE_W) | 0) - MAX_OX, y: (Math.random() * H) | 0, p: Math.random() * 6 }));
+    const clouds = Array.from({ length: 10 }, (_, i) => ({ x: Math.random() * WIDE_W - MAX_OX, y: 30 + (i % 4) * 46 + ((Math.random() * 10) | 0), w: 14 + ((Math.random() * 14) | 0), v: 2 + Math.random() * 4 }));
+    const hills = Array.from({ length: WIDE_W }, (_, i) => { const x = i - MAX_OX; return Math.round(16 + 7 * Math.sin(x * 0.06) + 5 * Math.sin(x * 0.17 + 1.3) + 2 * Math.sin(x * 0.5)); });
+    const mod = (n, m) => ((n % m) + m) % m;
 
     const pal = () => PALETTES[zone % PALETTES.length];
     const rowY = i => GROUND_Y - (i + 1) * BH;
@@ -540,10 +558,10 @@
     }
 
     function launchFireworks(row) {
-      const n = 4, blocks = pal().blocks;
+      const n = VW > W ? 7 : 4, blocks = pal().blocks;
       for (let k = 0; k < n; k++) {
         const delay = k * 0.18;
-        rockets.push({ x: 14 + ((k + Math.random()) * (W - 28)) / n, y: rowY(row) + BH,
+        rockets.push({ x: -OX + 14 + ((k + Math.random()) * (VW - 28)) / n, y: rowY(row) + BH,
                        vy: -(150 + Math.random() * 40), delay, color: blocks[k % blocks.length] });
         Sound.launch(delay);
       }
@@ -813,7 +831,7 @@
 
       for (const c of clouds) {
         c.x += c.v * dt;
-        if (c.x > W + 4) { c.x = -c.w - 4; }
+        if (c.x > W + MAX_OX + 4) { c.x = -MAX_OX - c.w - 4; }
       }
 
       shake = Math.max(0, shake - dt * 12);
@@ -911,30 +929,36 @@
     // ---- draw
     function draw() {
       const p = pal(), c = Math.round(cam);
+      const L = -OX, R = W + OX; // visible field-x range
+
+      // draw in field coordinates; the field sits in the middle of the view
+      g.setTransform(1, 0, 0, 1, OX, 0);
 
       // sky (pre-rendered flat bands with dithered seams)
-      g.drawImage(skyCanvas(zone % PALETTES.length), 0, 0);
+      g.drawImage(skyCanvas(zone % PALETTES.length), -MAX_OX, 0);
 
       // stars
       for (const s of stars) {
+        if (s.x < L || s.x >= R) continue;
         const sy = Math.floor((s.y + c * 0.15) % H);
         if (sy < H / 2 && ((time * 1.5 + s.p) % 6) > 0.4) rect(s.x, sy, 1, 1, p.star);
       }
       // clouds
       for (const cl of clouds) {
+        if (cl.x > R || cl.x + cl.w < L) continue;
         const cy = Math.floor(((cl.y + c * 0.3) % (H + 30)) - 15);
         drawCloud(Math.floor(cl.x), cy, cl.w, p);
       }
       // hills
       const hb = GROUND_Y + Math.round(c * 0.5);
-      if (hb - 32 < H) for (let x = 0; x < W; x++) rect(x, hb - hills[x], 1, H, p.hill);
+      if (hb - 32 < H) for (let x = L; x < R; x++) rect(x, hb - hills[x + MAX_OX], 1, H, p.hill);
       // ground
       const gy = GROUND_Y + c;
       if (gy < H) {
-        rect(0, gy, W, H - gy, p.ground);
-        rect(0, gy, W, 1, p.grass);
-        for (let x = 0; x < W; x++) if ((x * 7 + 3) % 5 === 0) rect(x, gy - 1, 1, 1, p.grass);
-        for (let yy = 4; yy < 24; yy += 3) for (let x = (yy * 3) % 6; x < W; x += 6) rect(x, gy + yy, 1, 1, p.groundDot);
+        rect(L, gy, VW, H - gy, p.ground);
+        rect(L, gy, VW, 1, p.grass);
+        for (let x = L; x < R; x++) if (mod(x * 7 + 3, 5) === 0) rect(x, gy - 1, 1, 1, p.grass);
+        for (let yy = 4; yy < 24; yy += 3) for (let x = L + mod((yy * 3) - L, 6); x < R; x += 6) rect(x, gy + yy, 1, 1, p.groundDot);
       }
 
       g.save();
@@ -944,7 +968,7 @@
       const markerCol = passedBest ? p.text : p.accent;
       if (markerY !== null && markerY > -12 && markerY < H) {
         // dashed line just above your best block (drawn behind the tower)
-        for (let x = 0; x < W; x += 4) { rect(x, markerY, 2, 1, markerCol); rect(x, markerY + 1, 2, 1, p.shadow); }
+        for (let x = L + mod(-L, 4); x < R; x += 4) { rect(x, markerY, 2, 1, markerCol); rect(x, markerY + 1, 2, 1, p.shadow); }
       }
 
       // fireworks live in the sky, behind the tower
@@ -1041,11 +1065,11 @@
       }
       g.restore();
 
-      if (zoneFlash > 0) rect(0, 0, W, H, p.text);
+      if (zoneFlash > 0) rect(L, 0, VW, H, p.text);
 
-      // HUD
-      text('HI ' + best, 4, 4, p.text, 1, 'left', p.shadow);
-      drawSpeaker(W - 13, 3, p.text, p.shadow);
+      // HUD (pinned to the corners of the view)
+      text('HI ' + best, L + 4, 4, p.text, 1, 'left', p.shadow);
+      drawSpeaker(R - 13, 3, p.text, p.shadow);
 
       if (state === 'title' && scores.length && Math.floor(time / 5) % 2 === 1) {
         // attract mode: alternate the logo with the high score table
@@ -1069,9 +1093,10 @@
 
       if (opts.scanlines !== false) {
         g.globalAlpha = 0.07; g.fillStyle = '#000';
-        for (let y = 1; y < H; y += 2) g.fillRect(0, y, W, 1);
+        for (let y = 1; y < H; y += 2) g.fillRect(L, y, VW, 1);
         g.globalAlpha = 1;
       }
+      g.setTransform(1, 0, 0, 1, 0, 0);
     }
 
     // double-bordered flat panel with a dithered drop shadow
@@ -1151,7 +1176,8 @@
     function onPointer(e) {
       e.preventDefault();
       const r = canvas.getBoundingClientRect();
-      const px = (e.clientX - r.left) * W / r.width, py = (e.clientY - r.top) * H / r.height;
+      // pointer position in field coordinates
+      const px = (e.clientX - r.left) * VW / r.width - OX, py = (e.clientY - r.top) * H / r.height;
       if (opsOpen) {
         // tap a row to select + activate it
         const i = Math.floor((py - OPS_Y0 + 4) / OPS_DY);
@@ -1165,7 +1191,7 @@
         return;
       }
       canvas.focus({ preventScroll: true });
-      if (px > W - 18 && py < 14) toggleMute();
+      if (px > W + OX - 18 && py < 14) toggleMute();
       else action();
     }
     // Touch only grants "user activation" on pointerup, which audio unlock and
